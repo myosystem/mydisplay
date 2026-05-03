@@ -4,7 +4,10 @@
 #include <myos>
 #include <string.h>
 #include <vector>
+#include <ranges>
+#include <algorithm>
 struct Surface {
+    uint32_t* shm;
     uint32_t* pixels;
 	SharedMem mem;
     int width;
@@ -14,12 +17,45 @@ struct Window_info {
     uint64_t id;
     uint64_t width;
     uint64_t height;
-    uint64_t x;
-    uint64_t y;
+    int64_t x;
+    int64_t y;
 	Surface surface;
     bool header;
+    uint32_t header_type;
 	bool is_open;
 };
+Window_info* getWindow(std::vector<Window_info>& windows, uint64_t id) {
+	for (auto& win : windows | std::ranges::views::reverse) {       // 뒤에서부터 탐색 (최상위 창이 먼저)
+        if (win.id == id) return &win;
+    }
+    return nullptr;
+}
+static const uint8_t cursor_mask[19][12] = {
+    {1,0,0,0,0,0,0,0,0,0,0,0},
+    {1,1,0,0,0,0,0,0,0,0,0,0},
+    {1,2,1,0,0,0,0,0,0,0,0,0},
+    {1,2,2,1,0,0,0,0,0,0,0,0},
+    {1,2,2,2,1,0,0,0,0,0,0,0},
+    {1,2,2,2,2,1,0,0,0,0,0,0},
+    {1,2,2,2,2,2,1,0,0,0,0,0},
+    {1,2,2,2,2,2,2,1,0,0,0,0},
+    {1,2,2,2,2,2,2,2,1,0,0,0},
+    {1,2,2,2,2,2,2,2,2,1,0,0},
+    {1,2,2,2,2,2,2,2,2,2,1,0},
+    {1,2,2,2,2,2,2,1,1,1,1,1},
+    {1,2,2,2,1,2,2,1,0,0,0,0},
+    {1,2,2,1,0,1,2,2,1,0,0,0},
+    {1,2,1,0,0,1,2,2,1,0,0,0},
+    {1,1,0,0,0,0,1,2,2,1,0,0},
+    {1,0,0,0,0,0,1,2,2,1,0,0},
+    {0,0,0,0,0,0,0,1,2,1,0,0},
+    {0,0,0,0,0,0,0,0,1,0,0,0},
+};
+constexpr int CURSOR_W = 12;
+constexpr int CURSOR_H = 19;
+constexpr uint32_t CURSOR_OUTLINE = 0x000000;
+constexpr uint32_t CURSOR_FILL = 0xFFFFFF;
+bool key_state[256] = { 0 };
 extern "C" void main() {
     Ginfo ginfo;
     get_ginfo(&ginfo);
@@ -57,16 +93,127 @@ extern "C" void main() {
         printf("Memory allocation failed!\n");
         return;
     }
-    memset((void*)fb, 0, ginfo.pitch * ginfo.height * bytesPerPixel);
+    memset((void*)fb, -1, ginfo.pitch * ginfo.height * bytesPerPixel);
+	uint64_t* frame_zorder = (uint64_t*)malloc(ginfo.pitch * ginfo.height * sizeof(uint64_t)); // 각 픽셀의 z-order를 저장하는 버퍼 (초기값은 0)
+	memset(frame_zorder, -1, ginfo.pitch * ginfo.height * sizeof(uint64_t));
 	std::vector<Window_info> windows;
 	uint32_t header_size = 30; // 예시로 헤더 높이를 30픽셀로 설정
+    struct {
+		POINT pos;
+        bool grepping;
+		uint64_t target_win_id;
+		POINT grep_offset;
+	} mouse;
+	uint32_t BACKGROUND_COLOR = 0xFFFFFFUL; // 흰색 배경
+    auto get_header_pixel = [&](uint32_t width, uint32_t height, uint32_t x, uint32_t y,bool is_top) {
+        // 간단한 예시: 헤더는 회색으로 채우고, 창이 활성화된 경우에는 파란색으로 테두리를 그립니다.
+        uint32_t header_color = 0xCCCCCC; // 회색
+		if (is_top) header_color = 0xEEEEEE; // 밝은 회색 (활성화된 창)
+        uint32_t border_color = 0x000000; // 파란색
+        if (x == 0 || x == width + 1 || y == 0 || y == height + 1) {
+            return border_color; // 테두리
+        }
+        return header_color; // 헤더 내부
+        };
+	std::vector<RECT> dirty_rects;
+    auto rezorder = [&]() {
+		memset(frame_zorder, -1, ginfo.pitch* ginfo.height * sizeof(uint64_t)); // z-order 초기화
+        for (auto& win : windows) {
+            if (!win.is_open) continue;
 
-    int cursor_x = 0;
-    int cursor_y = 0;
+            int wx = win.x, wy = win.y;
+            int ww = win.surface.width, wh = win.surface.height;
+
+            for (int y = 0; y < header_size + wh + 2; y++) {
+                for (int x = 0; x < ww + 2; x++) {
+                    int fb_x = wx + x;
+                    int fb_y = wy + y;
+                    if (fb_x < ginfo.width && fb_y < ginfo.height) {
+                        frame_zorder[fb_y * ginfo.pitch + fb_x] = win.id;
+                    }
+                }
+            }
+        }
+        };
+    auto zorder_update = [&](Window_info& win) {
+        int wx = win.x, wy = win.y;
+        int ww = win.surface.width, wh = win.surface.height;
+        for (int y = 0; y < header_size + wh + 2; y++) {
+            for (int x = 0; x < ww + 2; x++) {
+                int fb_x = wx + x;
+                int fb_y = wy + y;
+                if (fb_x < ginfo.width && fb_y < ginfo.height) {
+                    frame_zorder[fb_y * ginfo.pitch + fb_x] = win.id;
+                }
+            }
+        }
+		};
+    auto render_dirty = [&](RECT dirty) {
+		if (dirty.x < 0) {
+            dirty.width += dirty.x; // Reduce width by the negative offset
+            dirty.x = 0; // Start from the left edge of the screen
+		}
+        if (dirty.y < 0) {
+            dirty.height += dirty.y; // Reduce height by the negative offset
+            dirty.y = 0; // Start from the top edge of the screen
+        }
+        if (dirty.x >= ginfo.width || dirty.y >= ginfo.height) {
+            return; // 완전히 화면 밖에 있는 경우 렌더링할 필요 없음
+		}
+        if (dirty.x + dirty.width > ginfo.width) {
+            dirty.width = ginfo.width - dirty.x; // 화면 오른쪽 경계에 맞게 너비 조정
+        }
+        if (dirty.y + dirty.height > ginfo.height) {
+            dirty.height = ginfo.height - dirty.y; // 화면 아래쪽 경계에 맞게 높이 조정
+		}
+        for (int y = dirty.y; y < dirty.y + dirty.height; y++) {
+            for (int x = dirty.x; x < dirty.x + dirty.width; x++) {
+				if (x < 0 || y < 0) continue; // 음수 좌표는 무시
+                if (x >= ginfo.width || y >= ginfo.height) continue;
+
+                uint64_t win_id = frame_zorder[y * ginfo.pitch + x];
+
+                if (win_id == (uint64_t)-1) {
+                    // 아무 창도 없는 곳 → 배경색
+                    fb[y * ginfo.pitch + x] = BACKGROUND_COLOR;
+                    continue;
+                }
+                Window_info* win = getWindow(windows, win_id);
+				if (!win || !win->is_open) {
+                    // 예외 처리: 해당 ID의 창이 없을 때 (예: 창이 닫혔는데 z-order가 아직 업데이트 안 된 경우)
+                    fb[y * ginfo.pitch + x] = BACKGROUND_COLOR; // 배경색으로 채우기
+                    frame_zorder[y * ginfo.pitch + x] = -1; // z-order도 초기화
+                    continue;
+                }
+                // 헤더 영역인지 콘텐츠 영역인지 판별
+                int local_y = y - win->y;
+                int local_x = x - win->x;
+
+                if (local_y < header_size + 1) {
+                    // 헤더 → WM이 직접 색 계산
+                    if (win->header_type) {
+                        fb[y * ginfo.pitch + x] = get_header_pixel(win->surface.width, header_size, local_x, local_y, win_id == windows.back().id);
+                    }
+                }
+                else {
+                    int buf_x = local_x - 1;
+                    int buf_y = local_y - header_size - 1;
+                    if (buf_x < 0 || buf_x >= win->surface.width ||
+                        buf_y < 0 || buf_y >= win->surface.height) {
+                        fb[y * ginfo.pitch + x] = 0x0; // 테두리 색
+                        continue;
+                    }
+                    fb[y * ginfo.pitch + x] = win->surface.pixels[buf_y * win->surface.width + buf_x];
+                }
+            }
+        }
+        // syscall flush
+        };
     while (1) {
         msg_t msg;
+        wait_for_msg();
         uint64_t result = receive_msg(&msg);
-        if (result == 0) {
+        while (result == 0) {
             switch (msg.type) {
             case MSG_MAKE_WINDOW:
             {
@@ -78,78 +225,145 @@ extern "C" void main() {
                 win.id = msg.payload.params.arg[0];
                 win.width = unpack_hi(msg.payload.params.arg[2]);
                 win.height = unpack_lo(msg.payload.params.arg[2]);
-                win.surface.pixels = (uint32_t*)shared_mem_addr;
+                win.surface.shm = (uint32_t*)shared_mem_addr;
+				win.surface.pixels = (uint32_t*)malloc(mem.get_size());
+				memcpy(win.surface.pixels, win.surface.shm, mem.get_size());
                 win.surface.mem = mem;
                 win.surface.width = win.width;
                 win.surface.height = win.height;
-                win.header = false;
+                win.header = true;
+                win.header_type = 1;
                 win.is_open = true;
                 win.x = unpack_hi(msg.payload.params.arg[1]);
                 win.y = unpack_lo(msg.payload.params.arg[1]);
+                if (!windows.empty()) {
+                    Window_info before_win = windows.back();
+                    dirty_rects.push_back({ before_win.x, before_win.y, before_win.width + 2, before_win.height + (before_win.header ? header_size : 0) + 2 }); // 창 전체를 더티 영역으로 추가
+                }
                 windows.push_back(win);
+                dirty_rects.push_back({ win.x, win.y, win.width + 2, win.height + (win.header ? header_size : 0) + 2 }); // 창 전체를 더티 영역으로 추가
+                msg_t response{
+                    .sender_pid = 0,
+                    .type = MSG_MAKE_WINDOW,
+                    .status = 0,
+                    .payload{ {win.id} },
+                    .timestamp = 0
+				};
+				int result = send_msg(msg.sender_pid, &response);
+                printf("Code result=%d\n", (int)result);
+                rezorder();
                 break;
+            }
+            case MSG_DRAW_FRAME:
+            {
+				uint32_t x = unpack_hi(msg.payload.params.arg[1]), y = unpack_lo(msg.payload.params.arg[1]), width = unpack_hi(msg.payload.params.arg[2]), height = unpack_lo(msg.payload.params.arg[2]);
+                for (auto& win : windows) {
+                    if (win.id == msg.payload.params.arg[0]) {
+						if (x < 0) {
+                            width += x; // Reduce width by the negative offset
+                            x = 0; // Start from the left edge of the window
+                        }
+                        if (y < 0) {
+                            height += y; // Reduce height by the negative offset
+                            y = 0; // Start from the top edge of the window
+						}
+						if (x >= win.surface.width || y >= win.surface.height || width <= 0 || height <= 0) {
+                            break;
+                        }
+						if (x + width > win.surface.width) width = win.surface.width - x;
+						if (y + height > win.surface.height) height = win.surface.height - y;
+                        for (int j = 0; j < height; j++) {
+                            uint32_t* src = &win.surface.shm[(j + y) * win.surface.width + x];
+                            uint32_t* dst = &win.surface.pixels[(j + y) * win.surface.width + x];
+                            memcpy(dst, src, width * sizeof(uint32_t));
+                        }
+						dirty_rects.push_back({ win.x + x + 1, win.y + header_size + y + 1, width, height }); // 업데이트된 영역을 더티 영역으로 추가
+                    }
+                }
+				break;
             }
             case MSG_MOUSE_MOVE:
             {
-                cursor_x = (int)msg.payload.params.arg[0];
-                cursor_y = (int)msg.payload.params.arg[1];
-                // 마우스 커서 위치 업데이트 (예시로 모든 창의 헤더에 마우스 위치 표시)
-				//printf("cursor moved to: (%d, %d)\n", cursor_x, cursor_y);
+                mouse.pos.x = (int)msg.payload.params.arg[0];
+                mouse.pos.y = (int)msg.payload.params.arg[1];
 				break;
             }
+			case MSG_MOUSE_LCLICK:
+            {
+				if (mouse.grepping) break; // 이미 창 이동 모드인 경우 추가 클릭 무시
+                int click_x = (int)msg.payload.params.arg[0];
+                int click_y = (int)msg.payload.params.arg[1];
+                // 클릭 위치에 있는 창을 최상위로 올리기
+                for (auto it = windows.rbegin(); it != windows.rend(); ++it) {
+                    Window_info win = *it;
+                    if (!win.is_open) continue;
+                    if (frame_zorder[click_y * ginfo.pitch + click_x] == win.id) {
+						if (win.header && click_y < win.y + header_size) {
+                            // 헤더 클릭 → 창 이동 모드로 진입
+                            mouse.grepping = true;
+							mouse.target_win_id = win.id;
+                            mouse.grep_offset.x = click_x - win.x;
+                            mouse.grep_offset.y = click_y - win.y;
+                        }
+						if (it == windows.rbegin()) break;
+                        // 해당 창이 클릭된 경우
+                        Window_info prev_top = windows.back();
+                        dirty_rects.push_back({ prev_top.x, prev_top.y,
+                            prev_top.width + 2, (uint64_t)header_size + 1 });
+						std::rotate(&*it, (&*it) + 1, windows.end()); // 클릭된 창을 최상위로 이동
+						zorder_update(win); // z-order 업데이트
+                        dirty_rects.push_back({ win.x, win.y, win.width + 2, win.height + (win.header ? header_size : 0) + 2 }); // 창 전체를 더티 영역으로 추가
+                        break;
+                    }
+                }
+				break;
+            }
+            case MSG_MOUSE_LRELEASE:
+            {
+                mouse.grepping = false;
+                break;
+			}
             default:
                 break;
             }
+            result = receive_msg(&msg);
         }
-        for (uint64_t i = 0; i < ginfo.pitch * ginfo.height; i++) {
-            fb[i] = 0xF0F0F0; // Fill the framebuffer with base color (assuming 32-bit color)
-        }
-		for (auto& win : windows) { // 일단 이벤트 없이 모든 창을 그려보자
-			if (win.is_open) {
-                for (int y = 0; y < header_size + win.surface.height + 2; y++) {
-                    int fb_x1 = win.x;
-                    int fb_x2 = win.x + win.surface.width + 1;
-					int fb_y = win.y + y;
-                    if (fb_x1 < ginfo.width && fb_y < ginfo.height) {
-                        fb[fb_y * ginfo.pitch + fb_x1] = 0xC0C0C0; // Draw header rect (assuming 32-bit color)
+        if (mouse.grepping) {
+			for (auto& win : windows | std::ranges::views::reverse) {
+                if (win.id == mouse.target_win_id) {
+                    int new_x = mouse.pos.x - mouse.grep_offset.x;
+                    int new_y = mouse.pos.y - mouse.grep_offset.y;
+                    if (win.x != new_x || win.y != new_y) {
+                        dirty_rects.push_back({ win.x, win.y, win.width + 2, win.height + (win.header ? header_size : 0) + 2 }); // 이전 위치를 더티 영역으로 추가
+                        win.x = new_x;
+                        win.y = new_y;
+                        rezorder(); // z-order 업데이트
+                        dirty_rects.push_back({ win.x, win.y, win.width + 2, win.height + (win.header ? header_size : 0) + 2 }); // 새 위치를 더티 영역으로 추가
                     }
-					if (fb_x2 < ginfo.width && fb_y < ginfo.height) {
-						fb[fb_y * ginfo.pitch + fb_x2] = 0xC0C0C0; // Draw header rect (assuming 32-bit color)
-					}
-                }
-                for (int x = 0; x < win.surface.width + 1; x++) {
-					int fb_x = win.x + x;
-					int fb_y1 = win.y;
-                    int fb_y2 = win.y + header_size + win.surface.height + 2;
-                    if (fb_x < ginfo.width && fb_y1 < ginfo.height) {
-                        fb[fb_y1 * ginfo.pitch + fb_x] = 0xC0C0C0; // Draw header rect (assuming 32-bit color)
-					}
-                    if (fb_x < ginfo.width && fb_y2 < ginfo.height) {
-                        fb[fb_y2 * ginfo.pitch + fb_x] = 0xC0C0C0; // Draw header rect (assuming 32-bit color)
-                    }
-				}
-				for (int y = 0; y < win.surface.height; y++) {
-					for (int x = 0; x < win.surface.width; x++) {
-                        uint32_t pixel = win.surface.pixels[y * win.surface.width + x];
-                        int fb_x = win.x + x + 1;
-                        int fb_y = win.y + y + 2 + header_size;
-                        if (fb_x < ginfo.width && fb_y < ginfo.height) {
-                            fb[fb_y * ginfo.pitch + fb_x] = pixel;
-                        }
-                    }
-				}
-			}
-		}
-        for (int y = 0; y < 10; y++) {
-            for(int x = 0;x<10;x++) {
-                int fb_x = cursor_x + x;
-                int fb_y = cursor_y + y;
-                if (fb_x < ginfo.width && fb_y < ginfo.height) {
-                    fb[fb_y * ginfo.pitch + fb_x] = 0xFF0000; // Draw mouse cursor as red pixel (assuming 32-bit color)
                 }
             }
-
         }
+        if (dirty_rects.size() > 5) {
+			render_dirty({ 0, 0, ginfo.width, ginfo.height }); // 너무 많은 더티 영역이 쌓이면 전체 렌더링
+        }
+        else {
+            for (auto& rect : dirty_rects) {
+                render_dirty(rect);
+            }
+        }
+        dirty_rects.clear();
+        for (int cy = 0; cy < CURSOR_H; cy++) {
+            for (int cx = 0; cx < CURSOR_W; cx++) {
+                int fb_x = mouse.pos.x + cx;
+                int fb_y = mouse.pos.y + cy;
+                if (fb_x >= ginfo.width || fb_y >= ginfo.height) continue;
+
+                uint8_t v = cursor_mask[cy][cx];
+                if (v == 0) continue;  // 투명
+                fb[fb_y * ginfo.pitch + fb_x] = (v == 1) ? CURSOR_OUTLINE : CURSOR_FILL;
+            }
+        }
+        dirty_rects.push_back({ mouse.pos.x, mouse.pos.y, CURSOR_W, CURSOR_H });
         int status = (int)display_frame((void*)fb);
         if (status != 0) {
             printf("Display frame failed with status: %d\n", status);
