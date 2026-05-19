@@ -23,6 +23,7 @@ struct Window_info {
     bool header;
     uint32_t header_type;
 	bool is_open;
+	uint64_t process_id; // 창을 연 프로세스 ID
 };
 Window_info* getWindow(std::vector<Window_info>& windows, uint64_t id) {
 	for (auto& win : windows | std::ranges::views::reverse) {       // 뒤에서부터 탐색 (최상위 창이 먼저)
@@ -55,7 +56,6 @@ constexpr int CURSOR_W = 12;
 constexpr int CURSOR_H = 19;
 constexpr uint32_t CURSOR_OUTLINE = 0x000000;
 constexpr uint32_t CURSOR_FILL = 0xFFFFFF;
-bool key_state[256] = { 0 };
 extern "C" void main() {
     Ginfo ginfo;
     get_ginfo(&ginfo);
@@ -236,6 +236,7 @@ extern "C" void main() {
                 win.is_open = true;
                 win.x = unpack_hi(msg.payload.params.arg[1]);
                 win.y = unpack_lo(msg.payload.params.arg[1]);
+				win.process_id = msg.sender_pid;
                 if (!windows.empty()) {
                     Window_info before_win = windows.back();
                     dirty_rects.push_back({ before_win.x, before_win.y, before_win.width + 2, before_win.height + (before_win.header ? header_size : 0) + 2 }); // 창 전체를 더티 영역으로 추가
@@ -249,7 +250,7 @@ extern "C" void main() {
                     .payload{ {win.id} },
                     .timestamp = 0
 				};
-				int result = send_msg(msg.sender_pid, &response);
+				int result = send_msg(msg.sender_pid, &response, false);
                 printf("Code result=%d\n", (int)result);
                 rezorder();
                 break;
@@ -259,6 +260,7 @@ extern "C" void main() {
 				uint32_t x = unpack_hi(msg.payload.params.arg[1]), y = unpack_lo(msg.payload.params.arg[1]), width = unpack_hi(msg.payload.params.arg[2]), height = unpack_lo(msg.payload.params.arg[2]);
                 for (auto& win : windows) {
                     if (win.id == msg.payload.params.arg[0]) {
+						if (msg.sender_pid != win.process_id) break; // 창을 연 프로세스만 해당 창을 업데이트할 수 있도록 허용
 						if (x < 0) {
                             width += x; // Reduce width by the negative offset
                             x = 0; // Start from the left edge of the window
@@ -321,6 +323,21 @@ extern "C" void main() {
             case MSG_MOUSE_LRELEASE:
             {
                 mouse.grepping = false;
+                break;
+			}
+            case MSG_KEY_PRESS:
+            {
+                uint32_t keycode = (uint32_t)msg.payload.params.arg[0];
+                msg_t key_msg{
+                    .sender_pid = 0,
+                    .type = MSG_KEY_PRESS,
+                    .status = 0,
+                    .payload{ {keycode,windows.back().id,0}},
+                    .timestamp = 0
+				};
+				if (windows.size() > 0) {
+                    send_msg(windows.back().process_id, &key_msg, false); // 최상위 창의 프로세스에 키 이벤트 전달
+                }
                 break;
 			}
             default:
