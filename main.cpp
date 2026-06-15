@@ -6,6 +6,7 @@
 #include <vector>
 #include <ranges>
 #include <algorithm>
+#include <unistd.h>
 struct Surface {
     uint32_t* shm;
     uint32_t* pixels;
@@ -209,6 +210,9 @@ extern "C" void main() {
         }
         // syscall flush
         };
+    if (fork() == 0) {
+
+    }
     while (1) {
         msg_t msg;
         wait_for_msg();
@@ -231,12 +235,13 @@ extern "C" void main() {
                 win.surface.mem = mem;
                 win.surface.width = win.width;
                 win.surface.height = win.height;
-                win.header = true;
                 win.header_type = 1;
                 win.is_open = true;
                 win.x = unpack_hi(msg.payload.params.arg[1]);
                 win.y = unpack_lo(msg.payload.params.arg[1]);
 				win.process_id = msg.sender_pid;
+                uint64_t flags = msg.payload.params.arg[3];
+                win.header = !(flags & WINDOW_NOHEADER);
                 if (!windows.empty()) {
                     Window_info before_win = windows.back();
                     dirty_rects.push_back({ before_win.x, before_win.y, before_win.width + 2, before_win.height + (before_win.header ? header_size : 0) + 2 }); // 창 전체를 더티 영역으로 추가
@@ -360,7 +365,7 @@ extern "C" void main() {
                 }
             }
         }
-        if (dirty_rects.size() > 5) {
+        if (dirty_rects.size() > 50) {
 			render_dirty({ 0, 0, ginfo.width, ginfo.height }); // 너무 많은 더티 영역이 쌓이면 전체 렌더링
         }
         else {
