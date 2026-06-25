@@ -294,7 +294,7 @@ extern "C" void main() {
                             uint32_t* dst = &win.surface.pixels[(j + y) * win.surface.width + x];
                             memcpy(dst, src, width * sizeof(uint32_t));
                         }
-						dirty_rects.push_back({ win.x + x + 1, win.y + header_size + y + 1, width, height }); // 업데이트된 영역을 더티 영역으로 추가
+						dirty_rects.push_back({ win.x + (win.border ? 1 : 0) + x, win.y + (win.header ? header_size : 0) + (win.border ? 1 : 0) + y, width, height }); // 업데이트된 영역을 더티 영역으로 추가
                     }
                 }
 				break;
@@ -401,4 +401,4 @@ extern "C" void main() {
             printf("Display frame failed with status: %d\n", status);
         }
     }
-}
+}                                      
