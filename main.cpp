@@ -10,7 +10,7 @@
 struct Surface {
     uint32_t* shm;
     uint32_t* pixels;
-	SharedMem mem;
+    SharedMem mem;
     int width;
     int height;
 };
@@ -20,15 +20,15 @@ struct Window_info {
     uint64_t height;
     int64_t x;
     int64_t y;
-	Surface surface;
+    Surface surface;
     bool header;
     bool border;
     uint32_t header_type;
-	bool is_open;
-	uint64_t process_id; // 창을 연 프로세스 ID
+    bool is_open;
+    uint64_t process_id; // 창을 연 프로세스 ID
 };
 Window_info* getWindow(std::vector<Window_info>& windows, uint64_t id) {
-	for (auto& win : windows | std::ranges::views::reverse) {       // 뒤에서부터 탐색 (최상위 창이 먼저)
+    for (auto& win : windows | std::ranges::views::reverse) {       // 뒤에서부터 탐색 (최상위 창이 먼저)
         if (win.id == id) return &win;
     }
     return nullptr;
@@ -96,30 +96,47 @@ extern "C" void main() {
         return;
     }
     memset((void*)fb, -1, ginfo.pitch * ginfo.height * bytesPerPixel);
-	uint64_t* frame_zorder = (uint64_t*)malloc(ginfo.pitch * ginfo.height * sizeof(uint64_t)); // 각 픽셀의 z-order를 저장하는 버퍼 (초기값은 0)
-	memset(frame_zorder, -1, ginfo.pitch * ginfo.height * sizeof(uint64_t));
-	std::vector<Window_info> windows;
-	uint32_t header_size = 30; // 예시로 헤더 높이를 30픽셀로 설정
+    uint64_t* frame_zorder = (uint64_t*)malloc(ginfo.pitch * ginfo.height * sizeof(uint64_t)); // 각 픽셀의 z-order를 저장하는 버퍼 (초기값은 0)
+    memset(frame_zorder, -1, ginfo.pitch * ginfo.height * sizeof(uint64_t));
+    std::vector<Window_info> windows;
+    Window_info gui_win;
+    bool has_gui_win = false;
+    uint32_t header_size = 30; // 예시로 헤더 높이를 30픽셀로 설정
     struct {
-		POINT pos;
+        POINT pos;
         bool grepping;
-		uint64_t target_win_id;
-		POINT grep_offset;
-	} mouse;
-	uint32_t BACKGROUND_COLOR = 0xFFFFFFUL; // 흰색 배경
-    auto get_header_pixel = [&](uint32_t width, uint32_t height, uint32_t x, uint32_t y,bool is_top) {
+        uint64_t target_win_id;
+        POINT grep_offset;
+    } mouse;
+    uint32_t BACKGROUND_COLOR = 0xFFFFFFUL; // 흰색 배경
+    auto get_header_pixel = [&](uint32_t width, uint32_t height, uint32_t x, uint32_t y, bool is_top) {
         // 간단한 예시: 헤더는 회색으로 채우고, 창이 활성화된 경우에는 파란색으로 테두리를 그립니다.
         uint32_t header_color = 0xCCCCCC; // 회색
-		if (is_top) header_color = 0xEEEEEE; // 밝은 회색 (활성화된 창)
+        if (is_top) header_color = 0xEEEEEE; // 밝은 회색 (활성화된 창)
         uint32_t border_color = 0x000000; // 파란색
         if (x == 0 || x == width + 1 || y == 0 || y == height + 1) {
             return border_color; // 테두리
         }
         return header_color; // 헤더 내부
         };
-	std::vector<RECT> dirty_rects;
+    std::vector<RECT> dirty_rects;
     auto rezorder = [&]() {
-		memset(frame_zorder, -1, ginfo.pitch* ginfo.height * sizeof(uint64_t)); // z-order 초기화
+        memset(frame_zorder, -1, ginfo.pitch * ginfo.height * sizeof(uint64_t)); // z-order 초기화
+        if (has_gui_win) {
+            int wx = gui_win.x, wy = gui_win.y;
+            int ww = gui_win.surface.width, wh = gui_win.surface.height;
+            int border_px = gui_win.border ? 1 : 0;
+            for (int y = 0; y < (gui_win.header ? header_size : 0) + wh + 2 * border_px; y++) {
+                for (int x = 0; x < ww + 2 * border_px; x++) {
+                    int fb_x = wx + x, fb_y = wy + y;
+                    if (fb_x < ginfo.width && fb_y < ginfo.height) {
+                        int cx = x - border_px, cy = y - (gui_win.header ? header_size + border_px : border_px);
+                        if (cx >= 0 && cx < ww && cy >= 0 && cy < wh && gui_win.surface.pixels && (gui_win.surface.pixels[cy * ww + cx] & PIXEL_TRANSPARENT)) continue;
+                        frame_zorder[fb_y * ginfo.pitch + fb_x] = gui_win.id;
+                    }
+                }
+            }
+        }
         for (auto& win : windows) {
             if (!win.is_open) continue;
 
@@ -155,28 +172,28 @@ extern "C" void main() {
                 }
             }
         }
-		};
+        };
     auto render_dirty = [&](RECT dirty) {
-		if (dirty.x < 0) {
+        if (dirty.x < 0) {
             dirty.width += dirty.x; // Reduce width by the negative offset
             dirty.x = 0; // Start from the left edge of the screen
-		}
+        }
         if (dirty.y < 0) {
             dirty.height += dirty.y; // Reduce height by the negative offset
             dirty.y = 0; // Start from the top edge of the screen
         }
         if (dirty.x >= ginfo.width || dirty.y >= ginfo.height) {
             return; // 완전히 화면 밖에 있는 경우 렌더링할 필요 없음
-		}
+        }
         if (dirty.x + dirty.width > ginfo.width) {
             dirty.width = ginfo.width - dirty.x; // 화면 오른쪽 경계에 맞게 너비 조정
         }
         if (dirty.y + dirty.height > ginfo.height) {
             dirty.height = ginfo.height - dirty.y; // 화면 아래쪽 경계에 맞게 높이 조정
-		}
+        }
         for (int y = dirty.y; y < dirty.y + dirty.height; y++) {
             for (int x = dirty.x; x < dirty.x + dirty.width; x++) {
-				if (x < 0 || y < 0) continue; // 음수 좌표는 무시
+                if (x < 0 || y < 0) continue; // 음수 좌표는 무시
                 if (x >= ginfo.width || y >= ginfo.height) continue;
 
                 uint64_t win_id = frame_zorder[y * ginfo.pitch + x];
@@ -187,7 +204,8 @@ extern "C" void main() {
                     continue;
                 }
                 Window_info* win = getWindow(windows, win_id);
-				if (!win || !win->is_open) {
+                if (!win && has_gui_win && gui_win.id == win_id) win = &gui_win;
+                if (!win || !win->is_open) {
                     // 예외 처리: 해당 ID의 창이 없을 때 (예: 창이 닫혔는데 z-order가 아직 업데이트 안 된 경우)
                     fb[y * ginfo.pitch + x] = BACKGROUND_COLOR; // 배경색으로 채우기
                     frame_zorder[y * ginfo.pitch + x] = -1; // z-order도 초기화
@@ -238,8 +256,8 @@ extern "C" void main() {
                 win.width = unpack_hi(msg.payload.params.arg[2]);
                 win.height = unpack_lo(msg.payload.params.arg[2]);
                 win.surface.shm = (uint32_t*)shared_mem_addr;
-				win.surface.pixels = (uint32_t*)malloc(mem.get_size());
-				memcpy(win.surface.pixels, win.surface.shm, mem.get_size());
+                win.surface.pixels = (uint32_t*)malloc(mem.get_size());
+                memcpy(win.surface.pixels, win.surface.shm, mem.get_size());
                 win.surface.mem = mem;
                 win.surface.width = win.width;
                 win.surface.height = win.height;
@@ -247,11 +265,20 @@ extern "C" void main() {
                 win.is_open = true;
                 win.x = unpack_hi(msg.payload.params.arg[1]);
                 win.y = unpack_lo(msg.payload.params.arg[1]);
-				win.process_id = msg.sender_pid;
+                win.process_id = msg.sender_pid;
                 uint64_t style = unpack_lo(msg.payload.params.arg[3]);
                 uint64_t exstyle = unpack_hi(msg.payload.params.arg[3]);
                 win.header = !(style & WINDOW_NOHEADER);
                 win.border = !(style & WINDOW_NOBORDER);
+                if ((exstyle & WINDOW_EX_GUI) && !has_gui_win) {
+                    gui_win = win;
+                    has_gui_win = true;
+                    rezorder();
+                    dirty_rects.push_back({ win.x, win.y, win.width + (win.border ? 2 : 0), win.height + (win.header ? header_size : 0) + (win.border ? 2 : 0) });
+                    msg_t response{ .sender_pid = 0, .type = MSG_MAKE_WINDOW, .status = 0, .payload{ {win.id} }, .timestamp = 0 };
+                    send_msg(msg.sender_pid, &response, false);
+                    break;
+                }
                 if (!windows.empty()) {
                     Window_info before_win = windows.back();
                     dirty_rects.push_back({ before_win.x, before_win.y, before_win.width + (before_win.border ? 2 : 0), before_win.height + (before_win.header ? header_size : 0) + (before_win.border ? 2 : 0) }); // 창 전체를 더티 영역으로 추가
@@ -264,50 +291,62 @@ extern "C" void main() {
                     .status = 0,
                     .payload{ {win.id} },
                     .timestamp = 0
-				};
-				int result = send_msg(msg.sender_pid, &response, false);
+                };
+                int result = send_msg(msg.sender_pid, &response, false);
                 printf("Code result=%d\n", (int)result);
                 rezorder();
                 break;
             }
             case MSG_DRAW_FRAME:
             {
-				uint32_t x = unpack_hi(msg.payload.params.arg[1]), y = unpack_lo(msg.payload.params.arg[1]), width = unpack_hi(msg.payload.params.arg[2]), height = unpack_lo(msg.payload.params.arg[2]);
+                uint32_t x = unpack_hi(msg.payload.params.arg[1]), y = unpack_lo(msg.payload.params.arg[1]), width = unpack_hi(msg.payload.params.arg[2]), height = unpack_lo(msg.payload.params.arg[2]);
+                if (has_gui_win && gui_win.id == msg.payload.params.arg[0] && msg.sender_pid == gui_win.process_id) {
+                    uint32_t gx = x, gy = y, gw = width, gh = height;
+                    if (gx + gw > gui_win.surface.width) gw = gui_win.surface.width - gx;
+                    if (gy + gh > gui_win.surface.height) gh = gui_win.surface.height - gy;
+                    for (int j = 0; j < (int)gh; j++) {
+                        memcpy(&gui_win.surface.pixels[(j + gy) * gui_win.surface.width + gx],
+                            &gui_win.surface.shm[(j + gy) * gui_win.surface.width + gx],
+                            gw * sizeof(uint32_t));
+                    }
+                    dirty_rects.push_back({ gui_win.x + (int)gx, gui_win.y + (int)gy, (int)gw, (int)gh });
+                    break;
+                }
                 for (auto& win : windows) {
                     if (win.id == msg.payload.params.arg[0]) {
-						if (msg.sender_pid != win.process_id) break; // 창을 연 프로세스만 해당 창을 업데이트할 수 있도록 허용
-						if (x < 0) {
+                        if (msg.sender_pid != win.process_id) break; // 창을 연 프로세스만 해당 창을 업데이트할 수 있도록 허용
+                        if (x < 0) {
                             width += x; // Reduce width by the negative offset
                             x = 0; // Start from the left edge of the window
                         }
                         if (y < 0) {
                             height += y; // Reduce height by the negative offset
                             y = 0; // Start from the top edge of the window
-						}
-						if (x >= win.surface.width || y >= win.surface.height || width <= 0 || height <= 0) {
+                        }
+                        if (x >= win.surface.width || y >= win.surface.height || width <= 0 || height <= 0) {
                             break;
                         }
-						if (x + width > win.surface.width) width = win.surface.width - x;
-						if (y + height > win.surface.height) height = win.surface.height - y;
+                        if (x + width > win.surface.width) width = win.surface.width - x;
+                        if (y + height > win.surface.height) height = win.surface.height - y;
                         for (int j = 0; j < height; j++) {
                             uint32_t* src = &win.surface.shm[(j + y) * win.surface.width + x];
                             uint32_t* dst = &win.surface.pixels[(j + y) * win.surface.width + x];
                             memcpy(dst, src, width * sizeof(uint32_t));
                         }
-						dirty_rects.push_back({ win.x + (win.border ? 1 : 0) + x, win.y + (win.header ? header_size : 0) + (win.border ? 1 : 0) + y, width, height }); // 업데이트된 영역을 더티 영역으로 추가
+                        dirty_rects.push_back({ win.x + (win.border ? 1 : 0) + x, win.y + (win.header ? header_size : 0) + (win.border ? 1 : 0) + y, width, height }); // 업데이트된 영역을 더티 영역으로 추가
                     }
                 }
-				break;
+                break;
             }
             case MSG_MOUSE_MOVE:
             {
                 mouse.pos.x = (int)msg.payload.params.arg[0];
                 mouse.pos.y = (int)msg.payload.params.arg[1];
-				break;
+                break;
             }
-			case MSG_MOUSE_LCLICK:
+            case MSG_MOUSE_LCLICK:
             {
-				if (mouse.grepping) break; // 이미 창 이동 모드인 경우 추가 클릭 무시
+                if (mouse.grepping) break; // 이미 창 이동 모드인 경우 추가 클릭 무시
                 int click_x = (int)msg.payload.params.arg[0];
                 int click_y = (int)msg.payload.params.arg[1];
                 // 클릭 위치에 있는 창을 최상위로 올리기
@@ -315,31 +354,36 @@ extern "C" void main() {
                     Window_info win = *it;
                     if (!win.is_open) continue;
                     if (frame_zorder[click_y * ginfo.pitch + click_x] == win.id) {
-						if (win.header && click_y < win.y + header_size) {
+                        if (win.header && click_y < win.y + header_size) {
                             // 헤더 클릭 → 창 이동 모드로 진입
                             mouse.grepping = true;
-							mouse.target_win_id = win.id;
+                            mouse.target_win_id = win.id;
                             mouse.grep_offset.x = click_x - win.x;
                             mouse.grep_offset.y = click_y - win.y;
                         }
-						if (it == windows.rbegin()) break;
+                        if (it == windows.rbegin()) break;
                         // 해당 창이 클릭된 경우
                         Window_info prev_top = windows.back();
                         dirty_rects.push_back({ prev_top.x, prev_top.y,
                             prev_top.width + 2, (uint64_t)header_size + 1 });
-						std::rotate(&*it, (&*it) + 1, windows.end()); // 클릭된 창을 최상위로 이동
-						zorder_update(win); // z-order 업데이트
+                        std::rotate(&*it, (&*it) + 1, windows.end()); // 클릭된 창을 최상위로 이동
+                        zorder_update(win); // z-order 업데이트
                         dirty_rects.push_back({ win.x, win.y, win.width + (win.border ? 2 : 0), win.height + (win.header ? header_size : 0) + (win.border ? 2 : 0) }); // 창 전체를 더티 영역으로 추가
                         break;
                     }
                 }
-				break;
+                if (has_gui_win && frame_zorder[click_y * ginfo.pitch + click_x] == gui_win.id) {
+                    msg_t click_msg{ .sender_pid = 0, .type = MSG_MOUSE_LCLICK, .status = 0,
+                        .payload{ {(uint64_t)click_x, (uint64_t)click_y, 0} }, .timestamp = 0 };
+                    send_msg(gui_win.process_id, &click_msg, false);
+                }
+                break;
             }
             case MSG_MOUSE_LRELEASE:
             {
                 mouse.grepping = false;
                 break;
-			}
+            }
             case MSG_KEY_PRESS:
             {
                 uint32_t keycode = (uint32_t)msg.payload.params.arg[0];
@@ -349,19 +393,22 @@ extern "C" void main() {
                     .status = 0,
                     .payload{ {keycode,windows.back().id,0}},
                     .timestamp = 0
-				};
-				if (windows.size() > 0) {
+                };
+                if (windows.size() > 0) {
                     send_msg(windows.back().process_id, &key_msg, false); // 최상위 창의 프로세스에 키 이벤트 전달
                 }
+                else if (has_gui_win) {
+                    send_msg(gui_win.process_id, &key_msg, false);
+                }
                 break;
-			}
+            }
             default:
                 break;
             }
             result = receive_msg(&msg);
         }
         if (mouse.grepping) {
-			for (auto& win : windows | std::ranges::views::reverse) {
+            for (auto& win : windows | std::ranges::views::reverse) {
                 if (win.id == mouse.target_win_id) {
                     int new_x = mouse.pos.x - mouse.grep_offset.x;
                     int new_y = mouse.pos.y - mouse.grep_offset.y;
@@ -376,7 +423,7 @@ extern "C" void main() {
             }
         }
         if (dirty_rects.size() > 50) {
-			render_dirty({ 0, 0, ginfo.width, ginfo.height }); // 너무 많은 더티 영역이 쌓이면 전체 렌더링
+            render_dirty({ 0, 0, ginfo.width, ginfo.height }); // 너무 많은 더티 영역이 쌓이면 전체 렌더링
         }
         else {
             for (auto& rect : dirty_rects) {
@@ -401,4 +448,4 @@ extern "C" void main() {
             printf("Display frame failed with status: %d\n", status);
         }
     }
-}                                      
+}
