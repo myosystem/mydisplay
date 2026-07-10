@@ -1,4 +1,4 @@
-file(GLOB SRCS *.cpp)
+file(GLOB SRCS CONFIGURE_DEPENDS *.cpp)
 
 add_executable(mydisplay ${SRCS})
 

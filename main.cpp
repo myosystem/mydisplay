@@ -402,6 +402,24 @@ extern "C" void main() {
                 }
                 break;
             }
+            case MSG_KEY_RELEASE:
+            {
+                uint32_t keycode = (uint32_t)msg.payload.params.arg[0];
+                msg_t key_msg{
+                    .sender_pid = 0,
+                    .type = MSG_KEY_RELEASE,
+                    .status = 0,
+                    .payload{ {keycode,windows.back().id,0}},
+                    .timestamp = 0
+                };
+                if (windows.size() > 0) {
+                    send_msg(windows.back().process_id, &key_msg, false);
+                }
+                else if (has_gui_win) {
+                    send_msg(gui_win.process_id, &key_msg, false);
+                }
+                break;
+            }
             default:
                 break;
             }
