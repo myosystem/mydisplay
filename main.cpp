@@ -208,7 +208,6 @@ extern "C" void main() {
                 if (!win || !win->is_open) {
                     // 예외 처리: 해당 ID의 창이 없을 때 (예: 창이 닫혔는데 z-order가 아직 업데이트 안 된 경우)
 					rezorder(); // z-order를 다시 계산
-                    frame_zorder[y * ginfo.pitch + x] = -1; // z-order도 초기화
                     continue;
                 }
                 // 헤더 영역인지 콘텐츠 영역인지 판별
@@ -353,6 +352,11 @@ extern "C" void main() {
                     }
                 }
                 break;
+            }
+            case MSG_REZORDER:
+            {
+                rezorder();
+				break;
             }
             case MSG_MOUSE_MOVE:
             {
