@@ -207,7 +207,7 @@ extern "C" void main() {
                 if (!win && has_gui_win && gui_win.id == win_id) win = &gui_win;
                 if (!win || !win->is_open) {
                     // 예외 처리: 해당 ID의 창이 없을 때 (예: 창이 닫혔는데 z-order가 아직 업데이트 안 된 경우)
-                    fb[y * ginfo.pitch + x] = BACKGROUND_COLOR; // 배경색으로 채우기
+					rezorder(); // z-order를 다시 계산
                     frame_zorder[y * ginfo.pitch + x] = -1; // z-order도 초기화
                     continue;
                 }
@@ -313,17 +313,19 @@ extern "C" void main() {
             }
             case MSG_DRAW_FRAME:
             {
-                uint32_t x = unpack_hi(msg.payload.params.arg[1]), y = unpack_lo(msg.payload.params.arg[1]), width = unpack_hi(msg.payload.params.arg[2]), height = unpack_lo(msg.payload.params.arg[2]);
+                int32_t x = unpack_hi(msg.payload.params.arg[1]), y = unpack_lo(msg.payload.params.arg[1]);
+                uint32_t width = unpack_hi(msg.payload.params.arg[2]), height = unpack_lo(msg.payload.params.arg[2]);
                 if (has_gui_win && gui_win.id == msg.payload.params.arg[0] && msg.sender_pid == gui_win.process_id) {
-                    uint32_t gx = x, gy = y, gw = width, gh = height;
+                    int32_t gx = x, gy = y;
+                    uint32_t gw = width, gh = height;
                     if (gx + gw > gui_win.surface.width) gw = gui_win.surface.width - gx;
                     if (gy + gh > gui_win.surface.height) gh = gui_win.surface.height - gy;
                     for (int j = 0; j < (int)gh; j++) {
                         memcpy(&gui_win.surface.pixels[(j + gy) * gui_win.surface.width + gx],
                             &gui_win.surface.shm[(j + gy) * gui_win.surface.width + gx],
-                            gw * sizeof(uint32_t));
+                            gw * sizeof(int32_t));
                     }
-                    dirty_rects.push_back({ gui_win.x + (int)gx, gui_win.y + (int)gy, (int)gw, (int)gh });
+                    dirty_rects.push_back({ gui_win.x + (int)gx, gui_win.y + (int)gy, gw, gh });
                     break;
                 }
                 for (auto& win : windows) {
