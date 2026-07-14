@@ -297,6 +297,20 @@ extern "C" void main() {
                 rezorder();
                 break;
             }
+            case MSG_DESTROY_WINDOW:
+            {
+                uint64_t wid = msg.payload.params.arg[0];
+                for (size_t i = 0; i < windows.size(); i++) {
+                    if (windows[i].id == wid || windows[i].process_id == msg.sender_pid) {
+                        Window_info& w = windows[i];
+                        dirty_rects.push_back({ w.x, w.y, w.width + (w.border ? 2 : 0), w.height + (w.header ? header_size : 0) + (w.border ? 2 : 0) });
+                        windows.erase(i);
+                        break;
+                    }
+                }
+                rezorder();
+                break;
+            }
             case MSG_DRAW_FRAME:
             {
                 uint32_t x = unpack_hi(msg.payload.params.arg[1]), y = unpack_lo(msg.payload.params.arg[1]), width = unpack_hi(msg.payload.params.arg[2]), height = unpack_lo(msg.payload.params.arg[2]);
