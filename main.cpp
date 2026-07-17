@@ -407,17 +407,24 @@ extern "C" void main() {
             case MSG_KEY_PRESS:
             {
                 uint32_t keycode = (uint32_t)msg.payload.params.arg[0];
-                msg_t key_msg{
-                    .sender_pid = 0,
-                    .type = MSG_KEY_PRESS,
-                    .status = 0,
-                    .payload{ {keycode,windows.back().id,0}},
-                    .timestamp = 0
-                };
                 if (windows.size() > 0) {
+                    msg_t key_msg{
+                        .sender_pid = 0,
+                        .type = MSG_KEY_PRESS,
+                        .status = 0,
+                        .payload{ {keycode,windows.back().id,0}},
+                        .timestamp = 0
+                    };
                     send_msg(windows.back().process_id, &key_msg, false); // 최상위 창의 프로세스에 키 이벤트 전달
                 }
                 else if (has_gui_win) {
+                    msg_t key_msg{
+                        .sender_pid = 0,
+                        .type = MSG_KEY_PRESS,
+                        .status = 0,
+                        .payload{ {keycode,gui_win.id,0}},
+                        .timestamp = 0
+                    };
                     send_msg(gui_win.process_id, &key_msg, false);
                 }
                 break;
@@ -425,17 +432,24 @@ extern "C" void main() {
             case MSG_KEY_RELEASE:
             {
                 uint32_t keycode = (uint32_t)msg.payload.params.arg[0];
-                msg_t key_msg{
-                    .sender_pid = 0,
-                    .type = MSG_KEY_RELEASE,
-                    .status = 0,
-                    .payload{ {keycode,windows.back().id,0}},
-                    .timestamp = 0
-                };
                 if (windows.size() > 0) {
+                    msg_t key_msg{
+                        .sender_pid = 0,
+                        .type = MSG_KEY_RELEASE,
+                        .status = 0,
+                        .payload{ {keycode,windows.back().id,0}},
+                        .timestamp = 0
+                    };
                     send_msg(windows.back().process_id, &key_msg, false);
                 }
                 else if (has_gui_win) {
+                    msg_t key_msg{
+                        .sender_pid = 0,
+                        .type = MSG_KEY_RELEASE,
+                        .status = 0,
+                        .payload{ {keycode,gui_win.id,0}},
+                        .timestamp = 0
+                    };
                     send_msg(gui_win.process_id, &key_msg, false);
                 }
                 break;

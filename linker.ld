@@ -1,3 +1,4 @@
+ENTRY(_start)
 SECTIONS
 {
     /* 프로그램이 실제 실행될 가상 주소 */
