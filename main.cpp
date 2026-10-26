@@ -362,6 +362,11 @@ extern "C" void main() {
             {
                 mouse.pos.x = (int)msg.payload.params.arg[0];
                 mouse.pos.y = (int)msg.payload.params.arg[1];
+                if (has_gui_win) {   // 데스크톱(gui)에 커서 좌표 전달(논블로킹)
+                    msg_t mv{ .sender_pid = 0, .type = MSG_MOUSE_MOVE, .status = 0,
+                        .payload{ {(uint64_t)mouse.pos.x, (uint64_t)mouse.pos.y, 0} }, .timestamp = 0 };
+                    send_msg(gui_win.process_id, &mv, false);
+                }
                 break;
             }
             case MSG_MOUSE_LCLICK:
